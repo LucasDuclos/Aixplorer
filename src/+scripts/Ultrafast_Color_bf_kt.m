@@ -1,0 +1,449 @@
+% clear all
+
+% SCRIPTS.ULTRAFAST (PUBLIC)
+%   Build and run a sequence with an ultrafast imaging.
+%
+%   Note - This function is defined as a script of SCRIPTS package. It cannot be
+%   used without the legHAL package developed by SuperSonic Imagine and without
+%   a system with a REMOTE server running.
+%
+%   Copyright 2010 Supersonic Imagine
+%   Revision: 1.00 - Date: 2010/03/25
+
+% Sequence = usse.usse; Sequence = Sequence.selectHardware ; Sequence = Sequence.selectProbe
+
+%% Parameters definition
+
+sos = common.constants.SoundSpeed
+
+% System parameters
+AixplorerIP    = '10.77.103.9'; % IP address of the Aixplorer device
+
+ImagingVoltage = 40;             % imaging voltage [V]
+ImagingCurrent = 1;              % security current limit [A]
+
+% ============================================================================ %
+
+% Image parameters
+clear ImgInfo
+ImgInfo.Depth(1)           = 1; % initial depth [mm]
+ImgInfo.Depth(2)           = 40;  % image depth [mm]
+ImgInfo.NbColumnsPerPiezo  = 1;
+ImgInfo.NbRowsPerLambda    = 1;
+
+% ============================================================================ %
+
+% Ultrafast acquisition parameters
+clear UF
+
+% fondamental
+UF.TxPolarity     = [ 0 ]; % [ 0 1 ] : 0: Standard polarity, 1:Inverted polarity
+UF.TxElemsPattern = [ 0 ]; % [ 0 2 ] : 0: All elements, 1: Odd elements, 2: Even elements
+% puls inv (PI)
+% UF.TxPolarity     = [ 0 1 ]; % [ 0 1 ] : 0: Standard polarity, 1:Inverted polarity
+% UF.TxElemsPattern = [ 0 0 ]; % [ 0 2 ] : 0: All elements, 1: Odd elements, 2: Even elements
+% checker board fondamental (PM)
+% UF.TxPolarity     = [ 0 0 ]; % [ 0 1 ] : 0: Standard polarity, 1:Inverted polarity
+% UF.TxElemsPattern = [ 1 2 ]; % [ 0 2 ] : 0: All elements, 1: Odd elements, 2: Even elements
+% checker board + Pulse inversion (PMPI), only valid with RxBandwidth = 1
+% UF.TxPolarity     = [ 0 1 1 ]; % [ 0 1 ] : : Standard polarity, 1:Inverted polarity
+% UF.TxElemsPattern = [ 0 1 2 ]; % [ 0 2 ] : 0: All elements, 1: Odd elements, 2: Even elements
+
+UF.PulseInversion = length( unique( UF.TxPolarity ) ) - 1 ;
+
+UF.TwFreq       = 5/(UF.PulseInversion+1) ; % emission frequency [MHz]
+UF.NbHcycle     = 6;               % # of half cycles
+UF.FlatAngles   = [0];               % flat angles [deg]
+UF.DutyCycle    = 1;               % duty cycle [0, 1]
+UF.TxCenter     = system.probe.Pitch * system.probe.NbElemts/2;            % emission center [mm]
+UF.TxWidth      = system.probe.Pitch * system.probe.NbElemts;            % emission width [mm]
+UF.ApodFct      = 'none';          % emission apodization function (none, hanning)
+UF.RxCenter     = system.probe.Pitch * (system.probe.NbElemts)/2;     % reception center [mm]
+UF.RxWidth      = system.probe.Pitch * system.probe.NbElemts/2;      % reception width [mm]
+UF.RxBandwidth  = 2;               % sampling mode (1 = 200%, 2 = 100%, 3 = 50%)
+UF.FIRBandwidth = -1;              % FIR receiving bandwidth [%] - center frequency = UF.TwFreq, -1 for RAW IQ
+UF.NbFrames     = 4;               % # of acquired images
+UF.PRF          = 0;            % pulse frequency repetition [Hz] (0 for greatest possible)
+UF.FrameRateUF  = 2500;
+UF.FrameRate    = 0;
+UF.TGC          = 800 * ones(1,8); % TGC profile
+UF.TrigIn       = 0 ;
+UF.TrigOut      = 0 ;
+UF.TrigAll      = 0 ;
+UF.Repeat       = 1 ; % Repeat of the whole acquisition + transfer
+UF.NbLocalBuffer= 2 ;
+UF.NbHostBuffer = 4 ;
+UF.Repeat_sequence = 1;
+
+% ============================================================================ %
+%% DO NOT CHANGE - Additional parameters
+
+% Additional parameters for ultrafast acquisition
+UF.RxFreq = (1+UF.PulseInversion) * 4 * UF.TwFreq; % sampling frequency [MHz]
+
+% Estimate RxDelay for ultrafast acquisition
+UF.RxDelay = .75 * ImgInfo.Depth(1) * 1e3 / common.constants.SoundSpeed ;
+
+% Estimate RxDuration for ultrafast acquisition
+transmitDistanceMax = ImgInfo.Depth(2)/cosd(max(abs(UF.FlatAngles))) + sind(max(abs(UF.FlatAngles)))*UF.RxWidth;
+returnDistanceMax = ImgInfo.Depth(2)*sind(max(abs(UF.FlatAngles))) + UF.RxWidth ;
+returnDistanceMax = sqrt(returnDistanceMax^2 + ImgInfo.Depth(2)^2)
+UF.RxDuration = (transmitDistanceMax + returnDistanceMax) / common.constants.SoundSpeed *1e3 + 4/UF.RxFreq;
+
+% bfo
+UF.NbFrames_tot = UF.NbFrames*UF.Repeat; %*UF.Repeat_sequence;
+fire_tot = UF.NbFrames_tot*length(UF.FlatAngles)
+fire_buff = UF.NbFrames*length(UF.FlatAngles)
+time_emission = UF.NbFrames_tot/UF.PRF
+
+% ============================================================================ %
+% Ultrafast image formation parameters
+UF.BeamformingKneeAngle = 0.40;
+UF.BeamformingMaxAngle  = 0.50;
+UF.DynRangedB           = 60;
+UF.Threshold            = 90;
+
+% DO NOT CHANGE - Image info
+clear UFBfInfo
+UFBfInfo.LinePitch = 1 / ImgInfo.NbColumnsPerPiezo;                       % dx / PiezoPitch
+UFBfInfo.PitchPix  = 1 / ImgInfo.NbRowsPerLambda;                         % dz / lambda
+UFBfInfo.Depth(1)  = ImgInfo.Depth(1);                                    % initial depth [mm]
+UFBfInfo.Depth(2)  = ImgInfo.Depth(2);                                    % final depth [mm]
+UFBfInfo.RxApod(1) = UF.BeamformingKneeAngle * 4 * system.probe.Pitch ... % RxApodOne
+    * 1000 / common.constants.SoundSpeed * UF.RxFreq * 0.25;
+UFBfInfo.RxApod(2) = UF.BeamformingMaxAngle * 4 * system.probe.Pitch ...  % RxApodZero
+    * 1000 / common.constants.SoundSpeed * UF.RxFreq * 0.25;
+
+UFBfInfo.RxApod(1) = min(2,UFBfInfo.RxApod(1));
+UFBfInfo.RxApod(2) = min(2,UFBfInfo.RxApod(2));
+
+UFBfInfo.TxPolarity = UF.TxPolarity;
+UFBfInfo.TxElemsPattern = UF.TxElemsPattern;
+UFBfInfo.NbFlatAnglesAccum = 1;
+
+% ROI selection for image formation
+% UFBfInfo.FirstLine = 1;  % Range: [1-system.probe.NbElemts]
+% UFBfInfo.LastLine  = 64; % Range: [1-system.probe.NbElemts];
+% UFBfInfo.Depth(1)  = 5;  % initial depth [mm], must be > ImgInfo.Depth(1) and < ImgInfo.Depth(2)
+% UFBfInfo.Depth(2)  = 35; % final depth [mm], must be > UFBfInfo(1).Depth(1) and < ImgInfo.Depth(2)
+
+
+% ============================================================================ %
+% ============================================================================ %
+
+%% DO NOT CHANGE -  acquisition mode
+
+try
+    
+    % Create the ultrafast acquisition mode and add the push elusev
+    clear AcmoList
+    UltrafastAcmoID = 1 ;
+    Acmo = acmo.ultrafast( ...
+        'TwFreq',       UF.TwFreq, ...
+        'NbHcycle',     UF.NbHcycle, ...
+        'FlatAngles',   UF.FlatAngles, ...
+        'DutyCycle',    UF.DutyCycle, ...
+        'TxCenter',     UF.TxCenter, ...
+        'TxWidth',      UF.TxWidth, ...
+        'ApodFct',      UF.ApodFct, ...
+        'RxFreq',       UF.RxFreq, ...
+        'RxDuration',   UF.RxDuration, ...
+        'RxDelay',      UF.RxDelay, ...
+        'RxCenter',     UF.RxCenter, ...
+        'RxWidth',      UF.RxWidth, ...
+        'RxBandwidth',  UF.RxBandwidth, ...
+        'FIRBandwidth', UF.FIRBandwidth, ...
+        'RepeatFlat',   UF.NbFrames, ...
+        'PRF',          UF.PRF, ...
+        'FrameRateUF',  UF.FrameRateUF, ...
+        'FrameRate',    UF.FrameRate, ...
+        'ControlPts',   UF.TGC,...
+        'TxPolarity',   UF.TxPolarity,...
+        'TxElemsPattern', UF.TxElemsPattern,...
+        'TrigIn',       UF.TrigIn,...
+        'TrigOut',      UF.TrigOut,...
+        'TrigAll',      UF.TrigAll,...
+        'Repeat',       UF.Repeat, ...
+        'NbLocalBuffer',UF.NbLocalBuffer, ...
+        'NbHostBuffer' ,UF.NbHostBuffer );
+
+      AcmoList{UltrafastAcmoID} = Acmo ;
+    
+catch ErrorMsg
+    errordlg(ErrorMsg.message, ErrorMsg.identifier);
+end
+
+% ============================================================================ %
+% ============================================================================ %
+
+%% DO NOT CHANGE - Create and build the ultrasound sequence
+try
+    
+    % Create the TPC object
+    TPC = remote.tpc( ...
+        'imgVoltage', ImagingVoltage, ...
+        'imgCurrent', ImagingCurrent);
+    
+    % Create  and build the sequence
+    Sequence = usse.usse('TPC', TPC, 'acmo', AcmoList, 'Repeat',UF.Repeat_sequence, 'Popup',0 );
+   % Sequence = Sequence.selectProbe();
+    [Sequence NbAcqRx] = Sequence.buildRemote();
+    
+catch ErrorMsg
+    errordlg(ErrorMsg.message, ErrorMsg.identifier);
+    return
+end
+
+% plot sequence diagram
+if 0
+    SeqAcmo = Sequence.getParam('acmo');
+    Sequence.plot_diagram; ylim( [ -1 2 ] ); hold on;
+    % xlim( [ 0 2/SeqAcmo{1}.getParam('PRF')*1e6 ] );
+    xlim( [ 0 2/SeqAcmo{1}.getParam('FrameRateUF')*1e6 ] );
+    % xlim( [ 0 2/SeqAcmo{1}.getParam('FrameRate')*1e6 ] );
+    plot( repmat( 1/SeqAcmo{1}.getParam('PRF')*1e6, 1, 2), [ -1e3 1e3 ], 'g' )
+    plot( repmat( 1/SeqAcmo{1}.getParam('FrameRateUF')*1e6, 1, 2), [ -1e3 1e3 ], 'k' )
+    plot( repmat( 1/SeqAcmo{1}.getParam('FrameRate')*1e6, 1, 2), [ -1e3 1e3 ], 'r' )
+end
+
+% return
+% 
+% %% Beamform selected buffers
+% clear BFStruct
+% NThreads = 4;
+% 
+% for k=1:NbAcqRx
+%     BFStruct{k} = processing.lutFlats( Sequence, UltrafastAcmoID, UFBfInfo, NThreads );
+% end
+% 
+% if system.probe.Radius > 0
+%     ImgInfo.XOrigin = 0;
+% 
+%     if isfield( UFBfInfo, 'FirstLine' )
+%         ImgInfo.FirstLinePos = max( UFBfInfo.FirstLine,  (UF.RxCenter-UF.RxWidth/2) / system.probe.Pitch ) ;
+%     else
+%         ImgInfo.FirstLinePos = (UF.RxCenter-UF.RxWidth/2) / system.probe.Pitch;
+%     end
+% 
+%     Nx = 512 ;
+% 	Nz = 512 ;
+%     Data = processing.lutScanConvertImageFlat( BFStruct, ImgInfo, Nx, Nz );
+% end
+
+%% Do NOT CHANGE - Sequence execution
+try
+
+    % Initialize remote on systems
+    Sequence = Sequence.initializeRemote('IPaddress',AixplorerIP, 'InitTGC',UF.TGC, 'InitRxFreq',UF.RxFreq, 'InitSequence',0 );
+
+    % Load sequence
+    Sequence = Sequence.loadSequence();
+
+    % Execute sequence
+    clear buf;
+    Sequence = Sequence.startSequence('Wait', 0);
+
+    tic
+    % Retrieve data
+    for k = 1 : NbAcqRx
+        buf{k} = Sequence.getData('Realign',2);
+    end
+    toc
+
+    % Stop sequence
+    Sequence = Sequence.stopSequence('Wait', 1);
+
+catch ErrorMsg
+    errordlg(ErrorMsg.message, ErrorMsg.identifier);
+    return
+end
+
+
+%% plot IQ
+acq_id = 1;
+piezo_id = 98;
+sample_win = 170:250; % usefull on phantoms
+
+IQ = single( squeeze( buf{1}.RFdata(1:end-128,65:192,acq_id) ) );
+IQc = IQ(1:2:end,:) + 1i*IQ(2:2:end,:);
+
+IQ_log = 20*log10(abs( IQc ));
+
+figure(125253)
+imagesc(IQ_log)
+caxis([50 80])
+colorbar
+IQ_max = max(IQ_log(:));
+title(['Max is ' num2str(IQ_max) ])
+
+
+I = IQ(1:2:end,piezo_id);
+Q = IQ(2:2:end,piezo_id);
+I_max = max(abs(I(sample_win)));
+Q_max = max(abs(Q(sample_win)));
+
+figure(1255464)
+plot(I)
+title 'I'
+% caxis([50 80])
+title(['I max is ' num2str(I_max) ])
+
+figure(1255465)
+plot(Q)
+title 'Q'
+% caxis([50 80])
+title(['Q max is ' num2str(Q_max) ])
+
+
+return
+    
+%%
+clear BFStruct
+NThreads = 12;
+disp('beamforming');
+tic
+% sommation coherente
+for k=1:NbAcqRx*UF.Repeat_sequence
+    
+    BFStruct{k} = processing.lutSynthetic(Sequence,1,UFBfInfo);
+    BFStruct{k}.Info.DebugMode = 0 ;
+    BFStruct{k} = processing.reconSynthFlat(BFStruct{k}, buf{k},NThreads);
+%     buf{k} = 0;
+end
+
+% Display
+% DO NOT CHANGE - Compute additional parameters
+% Display parameters
+XOrigin = double(min(Sequence.InfoStruct.rx(1).Channels - 1)) ... % reception left position
+    * system.probe.Pitch;
+ZOrigin = ImgInfo.Depth(1);
+DeltaX = system.probe.Pitch / ImgInfo.NbColumnsPerPiezo;
+DeltaZ = common.constants.SoundSpeed / 1000 /(UF.RxFreq / 4.0) ...
+    / ImgInfo.NbRowsPerLambda;
+% Compute X scales
+UFNbBeamformedCols = size(BFStruct{1}.IQ, 2);
+UFXAxis            = XOrigin + DeltaX * (0 : (UFNbBeamformedCols - 1));
+
+% Compute Z scales
+UFNbBeamformedRows = size(BFStruct{1}.IQ, 1);
+UFZAxis            = ZOrigin + DeltaZ * (0 : (UFNbBeamformedRows - 1));
+% ============================================================================ %
+
+img = 20*log10(abs( squeeze( BFStruct{1}.IQ(:,:,1) ) ));
+
+figure(252234)
+imagesc( UFXAxis, UFZAxis, img )
+% imagesc( img )
+caxis([100 160])
+colorbar
+
+title 'bf aixplorer'
+
+% return
+
+
+%% Beamform using kt beamformer
+% addpath /home/labo/git/us/sequence_kt/
+addpath /home/labo/Downloads/
+
+XOrigin = double(min(Sequence.InfoStruct.rx(1).Channels - 1)) ... % reception left position
+    * system.probe.Pitch;
+
+p.speedOfSound = common.constants.SoundSpeed;
+p.piezoPitch = system.probe.Pitch;
+p.demodFreq = UF.RxFreq / 4.0;
+p.RxfNumber = 1.5;
+p.peakDelay = 0;
+p.linePitch = 1; %UFBfInfo.LinePitch;
+p.pixelPitch = 0.5;
+p.xOrigin = 0; %XOrigin;
+p.radius = 0;
+p.nbPiezos = system.probe.NbElemts;
+p.nbRXChannels = system.hardware.NbRxChan;
+p.channelOffset = Sequence.RemoteStruct.mode(buf{1}.mode + 1).channelSize(1) / 2; % [int16]
+
+p.skipSample = Sequence.InfoStruct.event(1).skipSamples / 2; % [IQ] pairs
+p.sampleSize = Sequence.InfoStruct.event(1).numSamples / 2; % [IQ] pairs
+
+lambda = p.speedOfSound / p.demodFreq;
+p.nbPixelPerLine = round((ImgInfo.Depth(2)-ImgInfo.Depth(1))/ (lambda*p.pixelPitch) * 1e3);
+p.nbRecon = 128 / p.linePitch;
+p.nbLinesPerRecon = 1;
+p.nbPulses = 1;
+p.nbFrames = 1;
+p.synthAcq = 0;
+p.nbSteeringAngles = length(UF.FlatAngles);
+p.steeringAngleList = UF.FlatAngles;
+p.timeOrigin = 0;
+p.firstChannel = 64;
+p.txOrigin = 64;
+
+p.zOrigin = ImgInfo.Depth(1);
+
+s = bf.setBfStruct(p);
+s.m_apod_param = 0.0;
+s.m_apod_type = 2;
+
+tic
+AlignOffset = int32(buf{1}.alignedOffset / 2);
+ChannelOffset = int32( Sequence.RemoteStruct.mode(buf{1}.mode + 1).channelSize(1) / 2 );
+IQ = buf{1}.data(AlignOffset + 1 ...
+    : AlignOffset + (ChannelOffset * system.hardware.NbRxChan));
+[bf_img, delay] = bf.synthetic_cpu(s, IQ);
+bf_time = toc
+
+figure(232525)
+imagesc(20*log10( abs(bf_img) ))
+caxis([40 100])
+colorbar
+title 'bf synthetic'
+
+return
+
+%%
+IQF = zeros(size(BFStruct{1}.IQ,1),size(BFStruct{1}.IQ,2),UF.NbFrames_tot,'single');
+
+for j = 1:UF.Repeat %*UF.Repeat_sequence;
+    
+    IQF(:,:,[1:UF.NbFrames] + (j-1)*UF.NbFrames ) = BFStruct{j}.IQ(:,:,1:UF.NbFrames);
+end
+
+par.Nim = UF.NbFrames_tot;
+par.fech = UF.PRF;
+
+%% 
+% figure;
+% colormap gray
+% for i = 1:10:UF.NbFrames_tot
+%     a = abs(IQF(:,:,i));
+%     imagesc(20*log10(a/max(a(:))))
+%     caxis([-50 0])
+%     title(i);
+%     pause(0.05)
+% end
+%         
+return
+
+%%
+[B,A] = butter(3,200/UF.FrameRateUF*2,'high');
+IQF2 = filter(B,A,IQF,[],3);
+close all;
+
+figure(823253);
+for k = 1:size(IQF2,3)
+%     k
+    imagesc(abs(IQF2(:,:,k)));
+    title(k);
+    caxis( [ 0 4e5 ] )
+    drawnow
+    pause(.01)
+end
+
+%%
+
+% figure( 124516 )
+% plot(squeeze(abs(IQF(60,60,:))))
+% 
+% disp( [ 'Imaging included ' num2str(UF.NbFrames) ' Frames of ' num2str(length(UF.FlatAngles)) ' flats angles and last ' num2str( 1/(SeqAcmo{1}.getParam('FrameRateUF'))*UF.NbFrames) ) ' s' ] )
+
+% disp( [ 'Imaging included ' num2str(UF.NbFrames) ' Frames of ' num2str(length(UF.FlatAngles)) ' flats angles and last ' num2str( 1/(SeqAcmo{1}.getParam('FrameRateUF'))*UF.NbFrames) ) ' s' ] )

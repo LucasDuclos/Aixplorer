@@ -1,0 +1,222 @@
+///////////////////////////////////////////////////////
+//                                                   //
+//  Copyright © 2005-2011 by SuperSonic Imagine, SA  //
+//         Confidential - All Right Reserved         //
+//                                                   //
+///////////////////////////////////////////////////////
+//
+//
+
+typedef struct float2 {
+float x,y ;
+} float2 ;
+
+#include <stdio.h>
+#include "beamformer.h"
+#include "mex.h"
+
+int getIntParam(const mxArray * pIn, const char * fieldname, int & out)
+{
+    mxArray * pArray = NULL;
+    pArray = mxGetField( pIn, 0, fieldname);
+    if(pArray)
+    {
+        out = (int)mxGetScalar(pArray);
+        mexPrintf("%s = %d\n",fieldname,out);
+        return 0;
+    }
+    else
+    {
+        mexPrintf(fieldname);
+        mexPrintf("not read \n");
+        
+        out = 0;
+        return 1;
+    }
+}
+int getFloatParam(const mxArray * pIn, const char * fieldname, float & out)
+{
+    mxArray * pArray = NULL;
+    pArray = mxGetField( pIn, 0, fieldname);
+    if(pArray)
+    {
+        out = (float)mxGetScalar(pArray);
+        mexPrintf("%s = %g\n",fieldname,out);
+        return 0;
+    }
+    else
+    {
+        mexPrintf(fieldname);
+        mexPrintf("not read \n");
+        out = 0;
+        return 1;
+    }
+}
+
+bool copyBeamformingStruct(const mxArray * pIn, SBeamformParameters * out)
+{
+
+    // float parameters
+
+    if(getFloatParam(pIn,"speedOfSound",out->m_speedOfSound))
+        return false ;
+    
+    out->m_invSpeedOfSound = 1.0f/out->m_speedOfSound ;
+    
+    if(getFloatParam(pIn,"piezoPitch",out->m_piezoPitch))
+        return false ;
+    if(getFloatParam(pIn,"demodFreq",out->m_demodFreq))
+        return false ;
+    if(getFloatParam(pIn,"rOrigin",out->m_rOrigin))
+        return false ;
+    if(getFloatParam(pIn,"fNumber",out->m_fNumber))
+        return false ;
+    if(getFloatParam(pIn,"peakDelay",out->m_peakDelay))
+        return false ;
+    //if(getFloatParam(pIn,"receiveAngle",out->m_receiveAngle))
+    //    return false ;
+    if(getFloatParam(pIn,"linePitch",out->m_linePitch))
+        return false ;
+    if(getFloatParam(pIn,"pixelPitch",out->m_pixelPitch))
+        return false ;
+    if(getFloatParam(pIn,"lambda",out->m_lambda))
+        return false ;
+    if(getFloatParam(pIn,"xOrigin",out->m_xOrigin))
+        return false ;
+    if(getFloatParam(pIn,"ProbeRadius",out->m_ProbeRadius))
+        return false ;
+
+    // integer parameters
+   
+    if(getIntParam(pIn,"nbPiezos",out->m_nbPiezos))
+        return false ;
+    if(getIntParam(pIn,"nbAngles",out->m_nbAngles))
+        return false ;
+    if(getIntParam(pIn,"nbImages",out->m_nbImages))
+        return false ;
+    if(getIntParam(pIn,"channelOffset",out->m_channelOffset))
+        return false ;
+    if(getIntParam(pIn,"firstSample",out->m_firstSample))
+        return false ;
+    if(getIntParam(pIn,"nbSamples",out->m_nbSamples))
+        return false ;
+    if(getIntParam(pIn,"nbPixelsPerLine",out->m_nbPixelsPerLine))
+        return false ;
+    if(getIntParam(pIn,"nbRecon",out->m_nbRecon))
+        return false ;
+    if(getIntParam(pIn,"firstAcquiredChannel",out->m_firstAcquiredChannel))
+        return false ;
+    if(getIntParam(pIn,"normMode",out->m_normMode))
+        return false ;
+    if(getIntParam(pIn,"frame_per_frame",out->m_frame_per_frame))
+        return false ;
+    if(getIntParam(pIn,"synthAcq",out->m_synthAcq))
+        return false ;
+    if(getIntParam(pIn,"usegpu",out->m_usegpu))
+        return false ;
+
+   // angles
+
+    mxArray * pArray;
+    pArray = mxGetField( pIn, 0, "xSources");
+    if(pArray)       
+    {
+        double * pDouble = mxGetPr(pArray);
+        for(int i=0 ; i< out->m_nbAngles;i++)
+        {
+            out->m_xSources[i] = (float)pDouble[i];
+            mexPrintf("out->m_xSources[i] =%g\n",out->m_xSources[i]);
+        }
+        for(int i=out->m_nbAngles ; i< NB_MAX_ANGLES;i++)
+        {
+            out->m_xSources[i] = 0.0f;
+        }
+    }
+    else
+    {
+         return false ;
+    }
+    
+    pArray = mxGetField( pIn, 0, "zSources");
+    if(pArray)       
+    {
+        double * pDouble = mxGetPr(pArray);
+        for(int i=0 ; i< out->m_nbAngles;i++)
+        {
+            out->m_zSources[i] = (float)pDouble[i];
+            mexPrintf("out->m_zSources[i] =%g\n",out->m_zSources[i]);
+        }
+        for(int i=out->m_nbAngles ; i< NB_MAX_ANGLES;i++)
+        {
+            out->m_zSources[i] = 0.0f;
+        }
+    }
+    else
+    {
+         return false ;
+    }
+
+    pArray = mxGetField( pIn, 0, "timeOrigin");
+    if(pArray)       
+    {
+        double * pDouble = mxGetPr(pArray);
+        for(int i=0 ; i< out->m_nbAngles;i++)
+        {
+            out->m_timeOrigin[i] = (float)pDouble[i];
+            mexPrintf("out->m_timeOrigin[i] =%g\n",out->m_timeOrigin[i]);
+        }
+        for(int i=out->m_nbAngles ; i< NB_MAX_ANGLES;i++)
+        {
+            out->m_timeOrigin[i] = 0.0f;
+        }
+    }
+    else
+    {
+         return false ;
+    }
+    return true ;
+}
+
+
+
+void mexFunction(int nlhs, mxArray *plhs[],int nrhs, const mxArray *prhs[])
+{
+
+    bool status = 0;
+    SBeamformParameters bfStruct;
+
+    // check the arguments
+    if(nrhs != 3)
+        mexErrMsgTxt("3 input required");
+
+    const mxArray * pInStruct = prhs[0];
+    const mxArray * pRFArray = prhs[1];
+    const mxArray * palignedOffset = prhs[2];
+    const int alignedOffset = ((int)mxGetScalar(palignedOffset))/2;
+    const int bufferSize = mxGetNumberOfElements(pRFArray)-alignedOffset;
+    short * pInRF = (short*)mxGetData(pRFArray)+alignedOffset;
+    
+    
+    // parse structure
+    status = copyBeamformingStruct(pInStruct, &bfStruct);
+    
+    if(status)
+    {
+        // create output matrix
+        
+        int dims[3] = {2*bfStruct.m_nbPixelsPerLine ,bfStruct.m_nbRecon, bfStruct.m_nbImages};
+        
+        plhs[0] = mxCreateNumericArray(3, dims, mxSINGLE_CLASS,mxREAL);
+        //plhs[0] = mxCreateNumericMatrix(2*bfStruct.m_nbPixelsPerLine, bfStruct.m_nbRecon , mxSINGLE_CLASS, mxREAL);
+        float2 * pOutImageIQ = (float2*)mxGetData(plhs[0]);
+        mexPrintf("bufferSize = %d\n",bufferSize);
+        
+        //if(bfStruct.m_usegpu)
+            cudaIQBeamform(&bfStruct,  pInRF , bufferSize , pOutImageIQ);
+        //else
+            //iq_beamform_kernel_cpu(pInRF, bufferSize, pOutImageIQ, bfStruct);
+    }
+    else
+        mexErrMsgTxt("problem with a parameter");
+    
+}
